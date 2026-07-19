@@ -1,0 +1,143 @@
+ZENITH - DEPLOY GUIDE (multi-tenant platform)
+================================================
+
+This version added a real database and multi-tenant signup. A few things
+changed from before - read Part 0 even if you've deployed this project
+before.
+
+
+PART 0 - WHAT CHANGED / WHY YOUR SITE LOOKED STUCK ON THE OLD VERSION
+--------------------------------------------------------------------------
+If you deployed an earlier version and it kept showing old content
+despite pushing new code: Netlify pins your Node.js version on your
+FIRST deploy and never changes it automatically. If that pinned version
+was too old for this project's dependencies, every build since has been
+silently failing, and Netlify just kept serving your last successful
+(old) build instead of showing an error.
+
+This is now fixed in the code (Node version is explicitly pinned to 22
+in three places: .nvmrc, package.json, and netlify.toml) - but you may
+still need to do ONE clean redeploy to clear it:
+
+  1. Netlify dashboard -> Deploys -> "Trigger deploy" -> "Clear cache and
+     deploy site" (the "clear cache" part matters here).
+
+
+PART 1 - GET A DATABASE (new requirement)
+-----------------------------------------------
+This version stores data in a real Postgres database instead of files,
+which is what makes the multi-tenant back office actually reliable (this
+also fixes "dashboard shows no appointments" from before - that was a
+symptom of file-based storage not being safely readable across
+serverless instances).
+
+Free option (recommended): Neon
+  1. Go to https://neon.tech, sign up free.
+  2. Create a new project.
+  3. Copy the connection string it gives you (starts with postgres://).
+  That's your DATABASE_URL.
+
+Any other Postgres host works too (Supabase, Railway, your own server) -
+this app uses the standard Postgres protocol, nothing Neon-specific.
+
+
+PART 2 - PUSH THE CODE
+----------------------------
+If you already have this repo connected to Netlify from before:
+
+  git add .
+  git commit -m "Multi-tenant rebuild"
+  git push
+
+Netlify rebuilds automatically. First time setting this up:
+
+  1. Push this project to a new GitHub repository (git init, git add .,
+     git commit, git remote add origin ..., git push).
+  2. https://app.netlify.com -> "Add new site" -> "Import an existing
+     project" -> pick your repo -> "Deploy site."
+
+
+PART 3 - ENVIRONMENT VARIABLES (required this time)
+---------------------------------------------------------
+Netlify dashboard -> Site configuration -> Environment variables:
+
+  DATABASE_URL      Your Postgres connection string from Part 1. REQUIRED
+                     - the site will not function without this.
+
+  SESSION_SECRET    Any long random string - this is what makes salon
+                     admin sessions secure. Generate one locally with:
+                       node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+                     REQUIRED for real security (a default is used if
+                     missing, but it's not private to you).
+
+  NOTIFY_EMAIL, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_FROM
+                     Optional - your email account's SMTP details for
+                     booking notification emails. Skip and they just log
+                     instead of sending.
+
+  TEXTBELT_KEY       Optional, defaults to "textbelt" (1 free SMS/day).
+
+  CRON_SECRET        Optional, protects the reminder endpoint.
+
+After adding variables: Deploys -> Trigger deploy -> Deploy site.
+
+
+PART 4 - CREATE YOUR FIRST SALON
+--------------------------------------
+1. Visit your Netlify URL, click "Create your salon" (or go to
+   yoursite.netlify.app/signup).
+2. Enter a salon name, your email, a password.
+3. You're dropped straight into that salon's admin back office.
+4. Go to Services, add at least one service - guests can't book anything
+   until there's a service to book.
+5. Go to Staff, add at least one stylist and set their working days.
+6. Click "View site" in the admin nav to see your public booking page -
+   this is the URL you share with guests:
+     yoursite.netlify.app/s/your-salon-slug
+
+
+PART 5 - VERIFY MULTI-TENANCY WORKS
+-----------------------------------------
+Sign up a SECOND salon with a different email (open a private/incognito
+browser window so you're not still logged into the first one). Add a
+different service to it. Confirm:
+  - Salon 2's admin only shows Salon 2's service, not Salon 1's.
+  - Salon 1's admin only shows Salon 1's service, not Salon 2's.
+  - Each salon's public booking page (/s/[slug]) only shows that salon's
+    own services.
+
+
+PART 6 - SET UP SMS REMINDERS (optional)
+-----------------------------------------------
+1. https://cron-job.org (or any free scheduled-task service), create a
+   free account.
+2. Add a job hitting this URL every hour:
+     https://yoursite.netlify.app/api/cron/send-reminders?secret=YOUR_CRON_SECRET
+   This checks every salon on the platform in one pass.
+
+
+PART 7 - CONNECT YOUR OWN DOMAIN (when ready)
+----------------------------------------------------
+Netlify dashboard -> Domain management -> "Add a domain," follow the DNS
+instructions shown. You don't need this to test everything - the free
+netlify.app subdomain works fully first, and each salon's booking site
+still works at yourdomain.com/s/[slug] once you connect one.
+
+
+TROUBLESHOOTING
+-------------------
+- Site shows old content after pushing -> see Part 0, do a "clear cache
+  and deploy."
+- Blank error / 500 on every page -> almost always DATABASE_URL missing
+  or wrong. Double check it in Netlify's environment variables.
+- "Incorrect email or password" on /admin/login -> that's per-salon now
+  (email + password you set at signup), not a shared site-wide password
+  like before.
+- A new salon's admin can log in but sees another salon's data -> this
+  should never happen; if you see it, it's a serious bug - check that
+  SESSION_SECRET is actually set (a missing one falls back to an insecure
+  default shared across ALL deployments of this code, which is unsafe in
+  production).
+- Marketing texts show "skipped" for every recipient -> Textbelt's free
+  tier only allows 1 SMS per day total across your whole site; expected
+  on the free tier.
